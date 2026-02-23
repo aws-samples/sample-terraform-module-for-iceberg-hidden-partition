@@ -1,0 +1,31 @@
+name: test2
+table_type: EXTERNAL_TABLE
+parameters:
+  table_type: iceberg
+  vacuum_max_snapshot_age_seconds: '60000'
+  write_compression: snappy
+  format: parquet
+  vacuum_max_metadata_files_to_keep: '3'
+  optimize_rewrite_data_file_threshold: '10'
+  vacuum_min_snapshots_to_keep: '3'
+partition_transforms:
+  updts: 'day'
+storage_descriptor:
+  location: s3://${s3_bucket_name}/test-db1/test2/
+  columns:
+    column_01:
+      comment: 'Schema identifier'
+      name: sch_id
+      type: string
+    column_02:
+      comment: 'Server name'
+      name: serv_name
+      type: string
+    column_03:
+      comment: 'update timestamp'
+      name: updts
+      type: timestamp
+    column_04:
+      comment: 'Crete timestamp'
+      name: create_at
+      type: timestamp
