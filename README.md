@@ -885,6 +885,6 @@ For issues or questions:
 
 ## Contributers
 
-Shashank Hirematt (https://github.com/hmshashank)
-Shubham Kumar (https://github.com/shubhamkumar101)
-Abhijeet Kumar (https://github.com/abhijee9)
+- Shashank Hirematt (https://github.com/hmshashank)
+- Shubham Kumar (https://github.com/shubhamkumar101)
+- Abhijeet Kumar (https://github.com/abhijee9)
