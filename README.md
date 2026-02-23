@@ -79,54 +79,159 @@ The solution uses a unique approach: when you run `terraform apply`, the module 
 - **Change Detection**: Compares desired vs. current partition state via Athena before triggering updates
 - **No Persistent Resources**: Glue jobs are ephemeral - created only when needed, deleted after execution
 
-## Architecture
-
-The solution automates Iceberg hidden partitioning through a multi-stage workflow:
+## Architecture Diagram
 
 ```
-┌─────────────────────────────────────────────────────────────────────┐
-│ 1. YAML Table Definitions (glue-catalog/)                          │
-│    - Define tables with partition_transforms                        │
-└────────────────────┬────────────────────────────────────────────────┘
-                     │
-                     ▼
-┌─────────────────────────────────────────────────────────────────────┐
-│ 2. Terraform Apply (root module)                                   │
-│    - Calls Glue-DB-Module for each database                        │
-└────────────────────┬────────────────────────────────────────────────┘
-                     │
-                     ▼
-┌─────────────────────────────────────────────────────────────────────┐
-│ 3. Glue-DB-Module (main.tf)                                        │
-│    - Creates Glue database and tables                              │
-│    - Detects Iceberg tables with partition_transforms              │
-│    - Triggers local-exec provisioner                               │
-└────────────────────┬────────────────────────────────────────────────┘
-                     │
-                     ▼
-┌─────────────────────────────────────────────────────────────────────┐
-│ 4. Python Orchestrator (iceberg_hidden_partition.py)               │
-│    - Queries Athena to check current partition state               │
-│    - Compares current vs desired partitions                        │
-│    - Creates temporary Glue job with partition.py script           │
-│    - Triggers the temporary Glue job                               │
-│    - Waits for job completion                                      │
-│    - Deletes the temporary Glue job                                │
-└────────────────────┬────────────────────────────────────────────────┘
-                     │
-                     ▼
-┌─────────────────────────────────────────────────────────────────────┐
-│ 5. Temporary Glue Job (partition.py)                               │
-│    - Runs Spark SQL ALTER TABLE commands                           │
-│    - Applies hidden partition transforms (day/month/year)          │
-│    - Verifies partitions were applied correctly                    │
-└────────────────────┬────────────────────────────────────────────────┘
-                     │
-                     ▼
-┌─────────────────────────────────────────────────────────────────────┐
-│ 6. Result: Iceberg Table with Hidden Partitions                    │
-└─────────────────────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                         INFRASTRUCTURE AS CODE LAYER                         │
+│                                                                              │
+│  ┌────────────────────────────────────────────────────────────────────┐    │
+│  │                        Terraform Workspace                          │    │
+│  │                                                                     │    │
+│  │  ┌──────────────────┐      ┌──────────────────┐                   │    │
+│  │  │  Iceberg Table   │      │  Glue Job        │                   │    │
+│  │  │  Definition      │      │  Definition      │                   │    │
+│  │  │  ─────────────   │      │  ─────────────   │                   │    │
+│  │  │  • Schema        │      │  • Script Path   │                   │    │
+│  │  │  • Location      │      │  • IAM Role      │                   │    │
+│  │  │  • Properties    │      │  • Parameters    │                   │    │
+│  │  │  • Partitions    │◄─────┤  • Timeout       │                   │    │
+│  │  └──────────────────┘      └──────────────────┘                   │    │
+│  │           │                          │                              │    │
+│  │           │                          │                              │    │
+│  │           ▼                          ▼                              │    │
+│  │  ┌─────────────────────────────────────────────┐                   │    │
+│  │  │     Terraform Provisioner / null_resource   │                   │    │
+│  │  │     ─────────────────────────────────────   │                   │    │
+│  │  │     • Triggers on table changes             │                   │    │
+│  │  │     • Invokes Glue job via AWS CLI/SDK      │                   │    │
+│  │  │     • Waits for job completion              │                   │    │
+│  │  │     • Validates partition evolution         │                   │    │
+│  │  └─────────────────────────────────────────────┘                   │    │
+│  └────────────────────────────────────────────────────────────────────┘    │
+└──────────────────────────────────────┬───────────────────────────────────────┘
+                                       │
+                                       │ terraform apply
+                                       │
+                                       ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                            AWS CONTROL PLANE                                 │
+│                                                                              │
+│  ┌────────────────────────────────────────────────────────────────────┐    │
+│  │                      AWS Glue Data Catalog                          │    │
+│  │                                                                     │    │
+│  │  ┌──────────────────────────────────────────────────────────┐     │    │
+│  │  │  Iceberg Table Metadata                                   │     │    │
+│  │  │  ─────────────────────────                                │     │    │
+│  │  │  • Table Schema                                           │     │    │
+│  │  │  • Partition Spec (before evolution)                      │     │    │
+│  │  │  • Storage Location                                       │     │    │
+│  │  │  • Table Properties                                       │     │    │
+│  │  │  • Metadata Location Pointer                              │     │    │
+│  │  └──────────────────────────────────────────────────────────┘     │    │
+│  └────────────────────────────────────────────────────────────────────┘    │
+│                                       │                                      │
+│                                       │ Job Invocation                       │
+│                                       ▼                                      │
+│  ┌────────────────────────────────────────────────────────────────────┐    │
+│  │                      AWS Glue Job (Short-lived)                     │    │
+│  │                                                                     │    │
+│  │  ┌──────────────────────────────────────────────────────────┐     │    │
+│  │  │  PySpark Script: iceberg_partition_evolution.py          │     │    │
+│  │  │  ──────────────────────────────────────────────────────  │     │    │
+│  │  │                                                           │     │    │
+│  │  │  1. Initialize Spark with Iceberg Extensions             │     │    │
+│  │  │     • IcebergSparkSessionExtensions                      │     │    │
+│  │  │     • GlueCatalog integration                            │     │    │
+│  │  │     • Lake Formation enabled                             │     │    │
+│  │  │                                                           │     │    │
+│  │  │  2. Read Current Partition Spec                          │     │    │
+│  │  │     • Query table metadata                               │     │    │
+│  │  │     • Validate current partitions                        │     │    │
+│  │  │                                                           │     │    │
+│  │  │  3. Execute Partition Evolution                          │     │    │
+│  │  │     ALTER TABLE glue_catalog.db.table                    │     │    │
+│  │  │     ADD PARTITION FIELD bucket(16, user_id)              │     │    │
+│  │  │     AS user_bucket                                       │     │    │
+│  │  │                                                           │     │    │
+│  │  │  4. Verify Evolution                                     │     │    │
+│  │  │     • Check new partition spec                           │     │    │
+│  │  │     • Validate metadata version                          │     │    │
+│  │  │     • Return success/failure status                      │     │    │
+│  │  │                                                           │     │    │
+│  │  └──────────────────────────────────────────────────────────┘     │    │
+│  │                                                                     │    │
+│  │  Runtime: 2-5 minutes | Workers: 2-5 | Type: G.1X                 │    │
+│  └────────────────────────────────────────────────────────────────────┘    │
+│                                       │                                      │
+│                                       │ Metadata Update                      │
+│                                       ▼                                      │
+│  ┌────────────────────────────────────────────────────────────────────┐    │
+│  │                      AWS Glue Data Catalog                          │    │
+│  │                                                                     │    │
+│  │  ┌──────────────────────────────────────────────────────────┐     │    │
+│  │  │  Updated Iceberg Table Metadata                           │     │    │
+│  │  │  ─────────────────────────────────                        │     │    │
+│  │  │  • Table Schema (unchanged)                               │     │    │
+│  │  │  • Partition Spec (EVOLVED)                               │     │    │
+│  │  │    - Original: partition by day(timestamp)                │     │    │
+│  │  │    - New: + bucket(16, user_id) as user_bucket            │     │    │
+│  │  │  • Updated Metadata Version                               │     │    │
+│  │  │  • New Metadata Location Pointer                          │     │    │
+│  │  └──────────────────────────────────────────────────────────┘     │    │
+│  └────────────────────────────────────────────────────────────────────┘    │
+└──────────────────────────────────────┬───────────────────────────────────────┘
+                                       │
+                                       │ Metadata Files
+                                       ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                            DATA STORAGE LAYER                                │
+│                                                                              │
+│  ┌────────────────────────────────────────────────────────────────────┐    │
+│  │                      Amazon S3 (Iceberg Warehouse)                  │    │
+│  │                                                                     │    │
+│  │  s3://bucket/warehouse/db.db/table/                                │    │
+│  │  │                                                                  │    │
+│  │  ├── metadata/                                                      │    │
+│  │  │   ├── v1.metadata.json          ◄── Original partition spec     │    │
+│  │  │   ├── v2.metadata.json          ◄── Evolved partition spec      │    │
+│  │  │   ├── snap-001.avro                                             │    │
+│  │  │   └── snap-002.avro                                             │    │
+│  │  │                                                                  │    │
+│  │  ├── data/                                                          │    │
+│  │  │   ├── timestamp_day=2024-01-01/                                 │    │
+│  │  │   │   └── data-001.parquet       ◄── Old partition layout       │    │
+│  │  │   │                                                              │    │
+│  │  │   └── timestamp_day=2024-01-02/user_bucket=5/                   │    │
+│  │  │       └── data-002.parquet       ◄── New partition layout       │    │
+│  │  │                                                                  │    │
+│  │  └── Note: Old data remains readable with original partition spec  │    │
+│  │          New data uses evolved partition spec                      │    │
+│  └────────────────────────────────────────────────────────────────────┘    │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                         MONITORING & VALIDATION                              │
+│                                                                              │
+│  ┌────────────────────────┐      ┌────────────────────────┐                │
+│  │  CloudWatch Logs       │      │  CloudWatch Metrics    │                │
+│  │  ──────────────────    │      │  ──────────────────    │                │
+│  │  • Job execution logs  │      │  • Job duration        │                │
+│  │  • Partition changes   │      │  • Success/failure     │                │
+│  │  • Error traces        │      │  • Resource usage      │                │
+│  └────────────────────────┘      └────────────────────────┘                │
+│                                                                              │
+│  ┌────────────────────────────────────────────────────────────────────┐    │
+│  │  Terraform State                                                    │    │
+│  │  ───────────────                                                    │    │
+│  │  • Tracks Glue job configuration                                   │    │
+│  │  • Stores table metadata reference                                 │    │
+│  │  • Records last partition evolution timestamp                      │    │
+│  └────────────────────────────────────────────────────────────────────┘    │
+└─────────────────────────────────────────────────────────────────────────────┘
 ```
+
 
 ## Prerequisites
 
@@ -683,6 +788,47 @@ def delete_temp_glue_job(job_name, region):
     glue_client.delete_job(JobName=job_name)
 ```
 
+## Limitations & Considerations
+
+### Terraform Limitations
+- Cannot natively manage Iceberg partition specs
+- Requires external job orchestration
+- State management for partition versions
+
+### Glue Job Considerations
+- Cold start time (30-60 seconds)
+- Minimum billing duration (1 minute)
+- Concurrent job execution limits
+
+### Iceberg Considerations
+- Partition evolution is metadata-only
+- Old data not automatically repartitioned
+- Query planning overhead for evolved tables
+
+## Monitoring & Troubleshooting
+
+### CloudWatch Metrics
+- `glue.driver.aggregate.numCompletedTasks`
+- `glue.driver.aggregate.elapsedTime`
+- Custom metrics for partition evolution success/failure
+
+### CloudWatch Logs
+```
+/aws-glue/jobs/output/iceberg-partition-evolution
+/aws-glue/jobs/error/iceberg-partition-evolution
+```
+
+### Common Issues
+1. **Permission Denied**: Check IAM role and Lake Formation permissions
+2. **Metadata Conflict**: Ensure no concurrent modifications
+3. **Invalid Partition Spec**: Validate transform syntax
+4. **Job Timeout**: Increase timeout or optimize operations
+
+## Conclusion
+
+This architecture successfully extends Terraform's capabilities to manage Iceberg hidden partitions while maintaining IaC principles. The solution is production-ready, cost-effective, and scalable for enterprise data lake environments.
+
+
 Then update the `main()` function to call these before/after job execution.
 
 ## Contributing
@@ -736,3 +882,9 @@ For issues or questions:
 - Review CloudWatch logs for Glue job execution details
 - Verify IAM permissions and S3 bucket access
 - Check Athena query history for partition detection issues
+
+## Contributers
+
+Shashank Hirematt (https://github.com/hmshashank)
+Shubham Kumar (https://github.com/shubhamkumar101)
+Abhijeet Kumar (https://github.com/abhijee9)
