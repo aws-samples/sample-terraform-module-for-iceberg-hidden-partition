@@ -10,64 +10,6 @@ Apache Iceberg supports hidden partitioning, which allows you to partition data 
 
 The solution uses a unique approach: when you run `terraform apply`, the module detects Iceberg tables that need partition transforms and triggers a Python orchestration script. This script dynamically creates a temporary AWS Glue job, executes it to apply the partition transforms using Spark SQL, waits for completion, and then deletes the temporary job - all within a single Terraform deployment.
 
-### Workflow Summary
-
-```
-┌──────────────────────────────────────────────────────────────────┐
-│                      terraform apply                             │
-└────────────────────────────┬─────────────────────────────────────┘
-                             │
-                             ▼
-┌──────────────────────────────────────────────────────────────────┐
-│  Glue-DB-Module: Creates database & tables from YAML            │
-└────────────────────────────┬─────────────────────────────────────┘
-                             │
-                             ▼
-┌──────────────────────────────────────────────────────────────────┐
-│  Detects tables with partition_transforms in locals.tf          │
-└────────────────────────────┬─────────────────────────────────────┘
-                             │
-                             ▼
-┌──────────────────────────────────────────────────────────────────┐
-│  terraform_data resource triggers local-exec provisioner        │
-└────────────────────────────┬─────────────────────────────────────┘
-                             │
-                             ▼
-┌──────────────────────────────────────────────────────────────────┐
-│  Python Orchestrator (iceberg_hidden_partition.py)              │
-│  ┌────────────────────────────────────────────────────────────┐ │
-│  │ 1. Query Athena: SHOW CREATE TABLE                        │ │
-│  │ 2. Parse current partition state from DDL                 │ │
-│  │ 3. Compare: current_partitions == desired_partitions?     │ │
-│  │ 4. If different:                                          │ │
-│  │    - Create temp Glue job (iceberg-partition-<db>)       │ │
-│  │    - Upload partition.py to S3                           │ │
-│  │    - Start job with --partitions-json argument           │ │
-│  │    - Poll job status every 10s                           │ │
-│  │    - Delete temp Glue job on completion                  │ │
-│  └────────────────────────────────────────────────────────────┘ │
-└────────────────────────────┬─────────────────────────────────────┘
-                             │
-                             ▼
-┌──────────────────────────────────────────────────────────────────┐
-│  Temporary Glue Job executes partition.py                       │
-│  ┌────────────────────────────────────────────────────────────┐ │
-│  │ Spark SQL:                                                │ │
-│  │   ALTER TABLE glue_catalog.db.table                       │ │
-│  │   ADD PARTITION FIELD days(timestamp_col)                 │ │
-│  │                                                           │ │
-│  │ Verifies partitions applied correctly                     │ │
-│  └────────────────────────────────────────────────────────────┘ │
-└────────────────────────────┬─────────────────────────────────────┘
-                             │
-                             ▼
-┌──────────────────────────────────────────────────────────────────┐
-│  ✓ Iceberg table now has hidden partitions                      │
-│  ✓ Temporary Glue job deleted                                   │
-│  ✓ Terraform apply completes                                    │
-└──────────────────────────────────────────────────────────────────┘
-```
-
 ### Key Features
 
 - **Declarative Partition Configuration**: Define partition transforms in YAML table definitions
@@ -576,18 +518,18 @@ Check the Terraform output for detailed error messages. Common issues:
 The current code in this repository implements most of the workflow but uses a **pre-existing Glue job** rather than creating temporary jobs. Specifically:
 
 **What Works:**
-- ✅ YAML-based table definitions with partition_transforms
-- ✅ Terraform module detects Iceberg tables needing partitions
-- ✅ Python orchestrator checks current partitions via Athena
-- ✅ Compares current vs desired partition state
-- ✅ Triggers existing Glue job with partition configuration
-- ✅ Waits for Glue job completion
-- ✅ partition.py script applies Spark SQL ALTER TABLE commands
+- YAML-based table definitions with partition_transforms
+- Terraform module detects Iceberg tables needing partitions
+- Python orchestrator checks current partitions via Athena
+- Compares current vs desired partition state
+- Triggers existing Glue job with partition configuration
+- Waits for Glue job completion
+- partition.py script applies Spark SQL ALTER TABLE commands
 
 **What Needs Implementation:**
-- ❌ Dynamic creation of temporary Glue job
-- ❌ Upload partition.py to S3 for job execution
-- ❌ Deletion of temporary Glue job after completion
+- Dynamic creation of temporary Glue job
+- Upload partition.py to S3 for job execution
+- Deletion of temporary Glue job after completion
 
 ### To Use Current Implementation
 
