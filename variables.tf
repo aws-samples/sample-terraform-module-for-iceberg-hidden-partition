@@ -20,9 +20,9 @@ variable "environment" {
   }
 }
 
-variable "artifact_s3_bucket" {
+variable "athena_s3_bucket" {
   type        = string
-  description = "S3 bucket for storing artifacts"
+  description = "S3 bucket for storing athena query results"
 }
 
 variable "s3_bucket_name" {

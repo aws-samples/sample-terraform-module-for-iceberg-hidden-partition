@@ -1,19 +1,9 @@
 # AWS Configuration
-aws_region = "us-east-2"
-
-# IAM Role for Terraform Provider (not needed if using default credentials)
-# provider_role_arn = "arn:aws:iam::205930618750:role/glue-test-role"
-
+aws_region = "us-east-1" # Change to your target region
 # Environment
-environment = "dev"
-
+environment = "production" # Options: dev, staging, production
 # S3 Bucket Configuration
-s3_bucket_name     = "demo-test-db-data-dev"
-artifact_s3_bucket = "demo-test-db-data-dev"
-
+s3_bucket_name   = "your-iceberg-bucket-name" # For Iceberg tables data and metadata
+athena_s3_bucket = "your-athena-bucket-name"  # For Athena query results
 # Application Version
-app_version = "1.0.0"
-
-# Build Directories (optional - using defaults)
-# lambda_build_dir = "../../lambda_build"
-# glue_build_dir   = "../../glue_build"
+app_version = "1.0.0" # Update as needed

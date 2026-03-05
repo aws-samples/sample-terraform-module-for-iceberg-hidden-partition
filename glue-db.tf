@@ -17,7 +17,7 @@ module "glue_catalog_databases" {
 
   # Enable Iceberg features (schema management + partition management)
   iceberg_schema_config = {
-    athena_s3_output = local.athena_results_path
+    athena_s3_output        = local.athena_results_path
     partition_glue_job_name = local.partition_glue_job_name
   }
 

@@ -27,8 +27,8 @@ locals {
   }
 
 
-  athena_results_path            = "s3://${var.s3_bucket_name}/athena-results/"
-  partition_glue_job_name        = "iceberg-partition-job"
+  athena_results_path     = "s3://${var.athena_s3_bucket}/athena-results/"
+  partition_glue_job_name = "iceberg-partition-job"
 
   # Define the specific database you want to process
   glue_dbs = toset([
@@ -39,7 +39,7 @@ locals {
   # get YAML files for each DB under glue-catalog
   glue_catalog_database = {
     for database in local.glue_dbs :
-    
+
     database => {
       for table in fileset("${path.module}/glue-catalog/${database}", "*.yaml") :
       trimsuffix(table, ".yaml") => yamldecode(templatefile("${path.module}/glue-catalog/${database}/${table}", local.stg_vars))
